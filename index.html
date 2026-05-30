@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Scanner Warehouse Pro + Flashlight</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root {
+            --ios-bg: #000000;
+            --glass-bg: rgba(28, 28, 30, 0.85);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --accent-green: #30d158;
+            --accent-red: #ff453a;
+            --accent-blue: #0a84ff;
+        }
+
+        body {
+            font-family: -apple-system, system-ui, sans-serif;
+            background: var(--ios-bg);
+            color: white;
+            margin: 0;
+            padding: 20px 16px;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            transition: background-color 0.2s ease;
+        }
+
+        .scanner-container {
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+            border-radius: 24px;
+            overflow: hidden;
+            background: #000;
+            border: 1px solid var(--glass-border);
+        }
+
+        #reader { border: none !important; }
+        #reader__scan_region svg { fill: var(--accent-green) !important; }
+        #reader video { object-fit: cover !important; }
+
+        .torch-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            z-index: 100;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            transition: 0.3s;
+        }
+        .torch-btn.active {
+            background: var(--accent-blue);
+            border-color: transparent;
+            box-shadow: 0 0 15px var(--accent-blue);
+        }
+
+        body.flash-green { background-color: rgba(48, 209, 88, 0.5) !important; }
+        body.flash-red { background-color: rgba(255, 69, 58, 0.5) !important; }
+
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        select {
+            width: 100%; background: transparent; color: white;
+            border: none; font-size: 18px; font-weight: 600; outline: none;
+        }
+
+        .btn-send {
+            background: var(--accent-green);
+            color: black; border: none; padding: 18px;
+            border-radius: 16px; font-size: 17px; font-weight: 700;
+            width: 100%; cursor: pointer; margin-top: 10px;
+        }
+        .btn-send:disabled { background: #3a3a3c; color: #8e8e93; }
+
+        #status-display {
+            text-align: center; font-size: 22px; font-weight: 700;
+            margin: 15px 0; min-height: 30px; color: var(--accent-green);
+        }
+
+        .history-item {
+            background: rgba(255,255,255,0.05);
+            padding: 12px; border-radius: 12px; margin-bottom: 8px;
+            display: flex; justify-content: space-between;
+            align-items: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .credits {
+            margin-top: auto; padding: 20px 0;
+            text-align: center; font-size: 11px; color: #636366;
+        }
+    </style>
+</head>
+<body onclick="initAudio()">
+
+    <div class="glass-panel">
+        <select id="route-select">
+            <option value="Маршрут 8">Маршрут 8</option>
+            <option value="Маршрут 943">Маршрут 943</option>
+            <option value="Маршрут 948">Маршрут 948</option>
+            <option value="Маршрут 942">Маршрут 942</option>
+            <option value="Маршрут 944">Маршрут 944</option>
+            <option value="Маршрут 946">Маршрут 946</option>
+            <option value="Маршрут 919">Маршрут 919</option>
+            <option value="Маршрут 18">Маршрут 18</option>
+            <option value="Маршрут 945">Маршрут 945</option>
+        </select>
+    </div>
+
+    <div class="scanner-container">
+        <div id="torch-toggle" class="torch-btn" onclick="toggleTorch()">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 2H9a2 2 0 0 0-2 2v2h10V4a2 2 0 0 0-2-2z"/>
+                <path d="M7 6h10v4a3 3 0 0 1-3 3H10a3 3 0 0 1-3-3V6z"/>
+                <line x1="10" y1="17" x2="14" y2="17"/>
+                <line x1="10" y1="21" x2="14" y2="21"/>
+                <circle cx="12" cy="11" r="1"/>
+            </svg>
+        </div>
+        <div id="reader"></div>
+    </div>
+
+    <div id="status-display">Готов к работе</div>
+
+    <button class="btn-send" id="send-btn" onclick="sendData()">
+        Отправить данные (0)
+    </button>
+
+    <div id="history-box" style="margin-top: 20px; flex-grow: 1;"></div>
+
+    <div class="credits">
+        © 2026 Developed by D. Martinkevich<br>for Sofrino KBT
+    </div>
+
+<script>
+    // ——— Настройка: URL веб-приложения Google Apps Script ———
+    const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyWBKqZgHmcjEXY81TlFYJnZ_tbiUweK60JiidcBWEvY6Gw74ZkZUXqW8X4IAAb2cqq/exec';
+
+    let routesStore = JSON.parse(localStorage.getItem('scanner_routes')) || {};
+    const routeSelect = document.getElementById('route-select');
+    
+    Array.from(routeSelect.options).forEach(option => { 
+        if (!routesStore[option.value]) routesStore[option.value] = []; 
+    });
+    
+    let lastScannedCode = null;
+    let audioContext = null;
+    let isSending = false;
+    let isTorchOn = false;
+    let scannerInstance = null;
+
+    function saveToLocal() {
+        localStorage.setItem('scanner_routes', JSON.stringify(routesStore));
+    }
+
+    function initAudio() {
+        if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioContext.state === 'suspended') audioContext.resume();
+    }
+
+    document.getElementById('route-select').addEventListener('change', () => {
+        initAudio();
+        lastScannedCode = null;
+        updateInterface();
+    });
+
+    function playBeep() {
+        if (!audioContext) return;
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        osc.frequency.setValueAtTime(1000, audioContext.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+        osc.connect(gain); gain.connect(audioContext.destination);
+        osc.start(); osc.stop(audioContext.currentTime + 0.1);
+    }
+
+    function screenFlash(type) {
+        document.body.classList.add('flash-' + type);
+        setTimeout(() => document.body.classList.remove('flash-' + type), 250);
+    }
+
+    async function toggleTorch() {
+        if (!scannerInstance) return;
+        try {
+            const state = !isTorchOn;
+            await scannerInstance.applyVideoConstraints({
+                advanced: [{ torch: state }]
+            });
+            isTorchOn = state;
+            document.getElementById('torch-toggle').classList.toggle('active', isTorchOn);
+        } catch (err) {
+            console.error("Фонарик не поддерживается", err);
+        }
+    }
+
+    function onScanSuccess(decodedText) {
+        if (isSending) return;
+
+        let cleanId = decodedText.trim();
+        if (cleanId.includes(':')) {
+            const parts = cleanId.split(':');
+            cleanId = parts.length > 2 ? parts[2] : cleanId;
+        }
+
+        const currentRoute = document.getElementById('route-select').value;
+        const status = document.getElementById('status-display');
+
+        if (!routesStore[currentRoute]) routesStore[currentRoute] = [];
+
+        if (routesStore[currentRoute].some(item => item.id === cleanId)) {
+            if (lastScannedCode !== cleanId) {
+                screenFlash('red');
+                status.textContent = 'ДУБЛИКАТ';
+                status.style.color = 'var(--accent-red)';
+                lastScannedCode = cleanId;
+            }
+            return;
+        }
+
+        lastScannedCode = cleanId;
+        playBeep();
+        screenFlash('green');
+        status.textContent = cleanId;
+        status.style.color = 'var(--accent-green)';
+        if (navigator.vibrate) navigator.vibrate(50);
+
+        // ПРАВКА: Теперь время сохраняется с секундами
+        const now = new Date();
+        const timeWithSeconds = now.toLocaleTimeString('ru-RU');
+
+        routesStore[currentRoute].unshift({ 
+            id: cleanId, 
+            time: timeWithSeconds 
+        });
+        
+        saveToLocal();
+        updateInterface();
+    }
+
+    function updateInterface() {
+        const route = document.getElementById('route-select').value;
+        const container = document.getElementById('history-box');
+        const list = routesStore[route] || [];
+        
+        let htmlString = list.length > 0 ? '<h4 style="color:#8e8e93; margin:0 0 10px 5px">ИСТОРИЯ</h4>' : '';
+        htmlString += list.map(item => 
+            `<div class="history-item"><b>${item.id}</b><span style="color:#8e8e93; font-variant-numeric: tabular-nums;">${item.time}</span></div>`
+        ).join('');
+        container.innerHTML = htmlString;
+
+        const btn = document.getElementById('send-btn');
+        btn.textContent = `Отправить ${route} (${list.length})`;
+        btn.disabled = list.length === 0 || isSending;
+    }
+
+    async function sendData() {
+        const route = document.getElementById('route-select').value;
+        const status = document.getElementById('status-display');
+        isSending = true;
+        updateInterface();
+        status.textContent = 'Отправка...';
+
+        try {
+            const response = await fetch(WEB_APP_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ route: route, data: routesStore[route] })
+            });
+
+            if (!response.ok) throw new Error('Ошибка сервера');
+
+            routesStore[route] = [];
+            saveToLocal();
+            lastScannedCode = null;
+            status.textContent = 'Успешно отправлено!';
+        } catch (err) {
+            alert('Ошибка сети! Данные сохранены локально.');
+            status.textContent = 'Ошибка!';
+        } finally {
+            isSending = false;
+            updateInterface();
+        }
+    }
+
+    const html5QrCode = new Html5Qrcode("reader");
+    scannerInstance = html5QrCode; 
+
+    const config = { fps: 20, qrbox: { width: 250, height: 250 } };
+
+    html5QrCode.start(
+        { facingMode: "environment" }, 
+        config, 
+        onScanSuccess
+    ).then(() => {
+        const videoElement = document.querySelector('#reader video');
+        if (videoElement && videoElement.srcObject) {
+            const track = videoElement.srcObject.getVideoTracks()[0];
+            if (track && track.getCapabilities && track.getCapabilities().torch) {
+                document.getElementById('torch-toggle').style.display = 'flex';
+            }
+        }
+    }).catch(err => {
+        alert("Камера недоступна. Проверьте разрешения.");
+    });
+
+    updateInterface();
+</script>
+</body>
+</html>
