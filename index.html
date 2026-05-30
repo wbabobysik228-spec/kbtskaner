@@ -154,7 +154,7 @@
 
 <script>
     // ——— Настройка: URL веб-приложения Google Apps Script ———
-    const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyWBKqZgHmcjEXY81TlFYJnZ_tbiUweK60JiidcBWEvY6Gw74ZkZUXqW8X4IAAb2cqq/exec';
+    const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxiWzAOa8g3dU_Dv0MacwgaqRltpTNM30-UDHnq_cQQelFoGrFb0eJII0jJ-St5luyR/exec';
 
     let routesStore = JSON.parse(localStorage.getItem('scanner_routes')) || {};
     const routeSelect = document.getElementById('route-select');
@@ -276,26 +276,45 @@
     async function sendData() {
         const route = document.getElementById('route-select').value;
         const status = document.getElementById('status-display');
+        const payload = JSON.stringify({ route: route, data: routesStore[route] });
+
         isSending = true;
         updateInterface();
         status.textContent = 'Отправка...';
 
         try {
-            const response = await fetch(WEB_APP_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ route: route, data: routesStore[route] })
-            });
+            // Google Apps Script: text/plain + no-cors (редиректы и CORS с github.io иначе ломают ответ)
+            const sent = navigator.sendBeacon(
+                WEB_APP_URL,
+                new Blob([payload], { type: 'text/plain;charset=utf-8' })
+            );
 
-            if (!response.ok) throw new Error('Ошибка сервера');
+            if (!sent) {
+                await fetch(WEB_APP_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    cache: 'no-cache',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: payload
+                });
+            }
 
             routesStore[route] = [];
             saveToLocal();
             lastScannedCode = null;
             status.textContent = 'Успешно отправлено!';
+            status.style.color = 'var(--accent-green)';
         } catch (err) {
-            alert('Ошибка сети! Данные сохранены локально.');
+            console.error(err);
+            alert(
+                'Не удалось отправить.\n\n' +
+                '1) В Apps Script: Развернуть → доступ «Все» (Anyone).\n' +
+                '2) В скрипте должен быть doPost.\n' +
+                '3) Открывайте сканер по https:// (GitHub Pages), не с диска.\n\n' +
+                'Данные остались в телефоне — повторите отправку.'
+            );
             status.textContent = 'Ошибка!';
+            status.style.color = 'var(--accent-red)';
         } finally {
             isSending = false;
             updateInterface();
