@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Scanner Warehouse Pro + Flashlight</title>
-    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js"></script>
     <style>
         :root {
             --ios-bg: #000000;
@@ -38,9 +38,38 @@
             border: 1px solid var(--glass-border);
         }
 
-        #reader { border: none !important; }
-        #reader__scan_region svg { fill: var(--accent-green) !important; }
-        #reader video { object-fit: cover !important; }
+        #reader {
+            width: 100%;
+            min-height: 260px;
+            background: #000;
+        }
+        #reader video {
+            width: 100%;
+            display: block;
+            object-fit: cover;
+        }
+        .scan-hint {
+            text-align: center;
+            font-size: 12px;
+            color: #8e8e93;
+            margin: -8px 0 8px;
+            line-height: 1.35;
+            padding: 0 8px;
+        }
+        .btn-photo {
+            display: none;
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            border: 1px solid var(--glass-border);
+            padding: 12px 16px;
+            border-radius: 14px;
+            font-size: 15px;
+            font-weight: 600;
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto 12px;
+            cursor: pointer;
+        }
 
         .torch-btn {
             position: absolute;
@@ -114,17 +143,7 @@
 <body onclick="initAudio()">
 
     <div class="glass-panel">
-        <select id="route-select">
-            <option value="Маршрут 8">Маршрут 8</option>
-            <option value="Маршрут 943">Маршрут 943</option>
-            <option value="Маршрут 948">Маршрут 948</option>
-            <option value="Маршрут 942">Маршрут 942</option>
-            <option value="Маршрут 944">Маршрут 944</option>
-            <option value="Маршрут 946">Маршрут 946</option>
-            <option value="Маршрут 919">Маршрут 919</option>
-            <option value="Маршрут 18">Маршрут 18</option>
-            <option value="Маршрут 945">Маршрут 945</option>
-        </select>
+        <select id="route-select" aria-label="Аллея или ворота"></select>
     </div>
 
     <div class="scanner-container">
@@ -139,6 +158,9 @@
         </div>
         <div id="reader"></div>
     </div>
+    <p class="scan-hint" id="scan-hint">Держите код на расстоянии 15–25 см</p>
+    <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
+    <button type="button" class="btn-photo" id="photo-btn">Сфотографировать QR</button>
 
     <div id="status-display">Готов к работе</div>
 
@@ -156,18 +178,69 @@
     // ——— Настройка: URL веб-приложения Google Apps Script ———
     const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxiWzAOa8g3dU_Dv0MacwgaqRltpTNM30-UDHnq_cQQelFoGrFb0eJII0jJ-St5luyR/exec';
 
-    let routesStore = JSON.parse(localStorage.getItem('scanner_routes')) || {};
     const routeSelect = document.getElementById('route-select');
-    
-    Array.from(routeSelect.options).forEach(option => { 
-        if (!routesStore[option.value]) routesStore[option.value] = []; 
+
+    (function buildLocationSelect() {
+        const alleyGroup = document.createElement('optgroup');
+        alleyGroup.label = 'Аллея';
+        for (let i = 0; i <= 10; i++) {
+            const opt = document.createElement('option');
+            opt.value = 'Аллея ' + i;
+            opt.textContent = 'Аллея ' + i;
+            alleyGroup.appendChild(opt);
+        }
+        routeSelect.appendChild(alleyGroup);
+
+        const gateGroup = document.createElement('optgroup');
+        gateGroup.label = 'Ворота';
+        for (let i = 2; i <= 51; i++) {
+            const opt = document.createElement('option');
+            opt.value = 'Ворота ' + i;
+            opt.textContent = 'Ворота ' + i;
+            gateGroup.appendChild(opt);
+        }
+        routeSelect.appendChild(gateGroup);
+    })();
+
+    let routesStore = JSON.parse(localStorage.getItem('scanner_routes')) || {};
+
+    Array.from(routeSelect.options).forEach(function (option) {
+        if (!routesStore[option.value]) routesStore[option.value] = [];
     });
     
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
     let lastScannedCode = null;
     let audioContext = null;
     let isSending = false;
     let isTorchOn = false;
     let scannerInstance = null;
+
+    if (isIOS) {
+        document.getElementById('scan-hint').textContent =
+            'iPhone: 20–30 см, хороший свет. Вплотную не фокусируется. Не читает — кнопка «Сфотографировать QR».';
+        document.getElementById('photo-btn').style.display = 'block';
+    } else {
+        document.getElementById('scan-hint').textContent =
+            'Держите код на расстоянии 15–25 см (вплотную камера часто не фокусируется)';
+    }
+
+    document.getElementById('photo-btn').addEventListener('click', function () {
+        document.getElementById('photo-input').click();
+    });
+
+    document.getElementById('photo-input').addEventListener('change', async function (e) {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        try {
+            const result = await QrScanner.scanImage(file, { returnDetailedScanResult: true });
+            onScanSuccess(result.data);
+        } catch (err) {
+            alert('QR на снимке не найден. Подойдите ближе, включите свет, снимите ровно.');
+        }
+    });
 
     function saveToLocal() {
         localStorage.setItem('scanner_routes', JSON.stringify(routesStore));
@@ -202,14 +275,15 @@
     async function toggleTorch() {
         if (!scannerInstance) return;
         try {
-            const state = !isTorchOn;
-            await scannerInstance.applyVideoConstraints({
-                advanced: [{ torch: state }]
-            });
-            isTorchOn = state;
+            if (isTorchOn) {
+                await scannerInstance.turnFlashOff();
+            } else {
+                await scannerInstance.turnFlashOn();
+            }
+            isTorchOn = !isTorchOn;
             document.getElementById('torch-toggle').classList.toggle('active', isTorchOn);
         } catch (err) {
-            console.error("Фонарик не поддерживается", err);
+            console.error('Фонарик не поддерживается', err);
         }
     }
 
@@ -269,49 +343,56 @@
         container.innerHTML = htmlString;
 
         const btn = document.getElementById('send-btn');
-        btn.textContent = `Отправить ${route} (${list.length})`;
+        btn.textContent = `Отправить · ${route} (${list.length})`;
         btn.disabled = list.length === 0 || isSending;
     }
 
     async function sendData() {
         const route = document.getElementById('route-select').value;
         const status = document.getElementById('status-display');
-        const payload = JSON.stringify({ route: route, data: routesStore[route] });
+        const list = routesStore[route] || [];
+        if (!list.length) return;
+
+        const payload = JSON.stringify({ route: route, data: list });
 
         isSending = true;
         updateInterface();
         status.textContent = 'Отправка...';
 
         try {
-            // Google Apps Script: text/plain + no-cors (редиректы и CORS с github.io иначе ломают ответ)
-            const sent = navigator.sendBeacon(
-                WEB_APP_URL,
-                new Blob([payload], { type: 'text/plain;charset=utf-8' })
-            );
+            const response = await fetch(WEB_APP_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: payload,
+                redirect: 'follow'
+            });
 
-            if (!sent) {
-                await fetch(WEB_APP_URL, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    cache: 'no-cache',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: payload
-                });
+            const text = await response.text();
+            let result = {};
+            try {
+                result = JSON.parse(text);
+            } catch (e) {
+                result = {};
+            }
+
+            if (!response.ok || result.ok === false) {
+                throw new Error(result.error || 'Сервер: ' + response.status);
             }
 
             routesStore[route] = [];
             saveToLocal();
             lastScannedCode = null;
-            status.textContent = 'Успешно отправлено!';
+            const n = result.written != null ? result.written : list.length;
+            status.textContent = 'Записано в таблицу: ' + n;
             status.style.color = 'var(--accent-green)';
         } catch (err) {
             console.error(err);
             alert(
-                'Не удалось отправить.\n\n' +
-                '1) В Apps Script: Развернуть → доступ «Все» (Anyone).\n' +
-                '2) В скрипте должен быть doPost.\n' +
-                '3) Открывайте сканер по https:// (GitHub Pages), не с диска.\n\n' +
-                'Данные остались в телефоне — повторите отправку.'
+                'Данные НЕ записаны в таблицу.\n' +
+                (err.message || err) +
+                '\n\nПроверьте вкладку «Сканирования» в той же таблице, где Apps Script.\n' +
+                'На GitHub залейте свежий index.html.\n' +
+                'Список на телефоне сохранён — отправьте снова.'
             );
             status.textContent = 'Ошибка!';
             status.style.color = 'var(--accent-red)';
@@ -321,26 +402,38 @@
         }
     }
 
-    const html5QrCode = new Html5Qrcode("reader");
-    scannerInstance = html5QrCode; 
+    (async function initScanner() {
+        QrScanner.WORKER_PATH = 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner-worker.min.js';
 
-    const config = { fps: 20, qrbox: { width: 250, height: 250 } };
+        const reader = document.getElementById('reader');
+        const video = document.createElement('video');
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.setAttribute('muted', 'true');
+        video.muted = true;
+        reader.appendChild(video);
 
-    html5QrCode.start(
-        { facingMode: "environment" }, 
-        config, 
-        onScanSuccess
-    ).then(() => {
-        const videoElement = document.querySelector('#reader video');
-        if (videoElement && videoElement.srcObject) {
-            const track = videoElement.srcObject.getVideoTracks()[0];
-            if (track && track.getCapabilities && track.getCapabilities().torch) {
+        scannerInstance = new QrScanner(
+            video,
+            function (decodedText) { onScanSuccess(decodedText); },
+            {
+                preferredCamera: 'environment',
+                maxScansPerSecond: isIOS ? 12 : 20,
+                highlightScanRegion: true,
+                highlightCodeOutline: true
+            }
+        );
+
+        try {
+            await scannerInstance.start();
+            if (await scannerInstance.hasFlash()) {
                 document.getElementById('torch-toggle').style.display = 'flex';
             }
+        } catch (err) {
+            console.error(err);
+            alert('Камера недоступна. Проверьте разрешения.');
         }
-    }).catch(err => {
-        alert("Камера недоступна. Проверьте разрешения.");
-    });
+    })();
 
     updateInterface();
 </script>
