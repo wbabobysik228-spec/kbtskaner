@@ -220,6 +220,9 @@
     let scannerInstance = null;
     let videoTrack = null;
     let cameraStarted = false;
+    let scanEngine = null;
+    let nativeDetector = null;
+    let nativeLoopActive = false;
 
     if (isIOS) {
         document.getElementById('scan-hint').textContent =
@@ -233,10 +236,17 @@
     document.getElementById('photo-input').addEventListener('change', async function (e) {
         const file = e.target.files && e.target.files[0];
         e.target.value = '';
-        if (!file || !scannerInstance) return;
+        if (!file) return;
         try {
-            const text = await scannerInstance.scanFile(file, false);
-            onScanSuccess(text);
+            if (nativeDetector) {
+                const bitmap = await createImageBitmap(file);
+                const codes = await nativeDetector.detect(bitmap);
+                if (!codes.length) throw new Error('no code');
+                onScanSuccess(codes[0].rawValue);
+            } else if (scannerInstance) {
+                const text = await scannerInstance.scanFile(file, false);
+                onScanSuccess(text);
+            }
         } catch (err) {
             alert('QR на снимке не найден. Подойдите ближе, включите свет, снимите ровно.');
         }
@@ -404,44 +414,124 @@
         }
     }
 
-    scannerInstance = new Html5Qrcode('reader', {
-        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
-        verbose: false
-    });
+    async function canUseNativeScanner() {
+        if (!('BarcodeDetector' in window)) return false;
+        try {
+            const formats = await BarcodeDetector.getSupportedFormats();
+            return formats.indexOf('qr_code') !== -1;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function setupTorchFromTrack() {
+        if (videoTrack && videoTrack.getCapabilities && videoTrack.getCapabilities().torch) {
+            document.getElementById('torch-toggle').style.display = 'flex';
+        }
+    }
+
+    async function startNativeCamera(status) {
+        const reader = document.getElementById('reader');
+        reader.innerHTML = '';
+
+        const video = document.createElement('video');
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.muted = true;
+        reader.appendChild(video);
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: { ideal: 'environment' },
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        videoTrack = stream.getVideoTracks()[0];
+        setupTorchFromTrack();
+
+        nativeDetector = new BarcodeDetector({ formats: ['qr_code'] });
+        scanEngine = 'native';
+        nativeLoopActive = true;
+
+        status.textContent = 'Быстрый режим · готов';
+        status.style.color = 'var(--accent-green)';
+
+        (async function nativeScanLoop() {
+            while (nativeLoopActive) {
+                try {
+                    const codes = await nativeDetector.detect(video);
+                    if (codes.length > 0) {
+                        onScanSuccess(codes[0].rawValue);
+                    }
+                } catch (e) { /* кадр без кода */ }
+                await new Promise(function (r) { setTimeout(r, 40); });
+            }
+        })();
+    }
+
+    async function startHtml5Camera(status) {
+        scannerInstance = new Html5Qrcode('reader', {
+            formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+            verbose: false
+        });
+
+        await scannerInstance.start(
+            { facingMode: 'environment' },
+            {
+                fps: isIOS ? 12 : 18,
+                disableFlip: true,
+                experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+                qrbox: function (w, h) {
+                    const edge = Math.min(w, h);
+                    const size = Math.floor(edge * 0.9);
+                    return { width: size, height: size };
+                }
+            },
+            onScanSuccess
+        );
+
+        scanEngine = 'html5';
+        status.textContent = 'Готов к работе';
+        status.style.color = 'var(--accent-green)';
+
+        const video = document.querySelector('#reader video');
+        if (video && video.srcObject) {
+            videoTrack = video.srcObject.getVideoTracks()[0];
+            setupTorchFromTrack();
+        }
+    }
 
     async function startCamera() {
         if (cameraStarted) return;
         const status = document.getElementById('status-display');
 
         try {
-            await scannerInstance.start(
-                { facingMode: 'environment' },
-                {
-                    fps: isIOS ? 10 : 15,
-                    disableFlip: true,
-                    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
-                    qrbox: function (w, h) {
-                        const edge = Math.min(w, h);
-                        const size = Math.floor(edge * 0.85);
-                        return { width: size, height: size };
-                    }
-                },
-                onScanSuccess
-            );
-
-            cameraStarted = true;
-            status.textContent = 'Готов к работе';
-            status.style.color = 'var(--accent-green)';
-
-            const video = document.querySelector('#reader video');
-            if (video && video.srcObject) {
-                videoTrack = video.srcObject.getVideoTracks()[0];
-                if (videoTrack && videoTrack.getCapabilities && videoTrack.getCapabilities().torch) {
-                    document.getElementById('torch-toggle').style.display = 'flex';
-                }
+            if (await canUseNativeScanner()) {
+                await startNativeCamera(status);
+            } else {
+                await startHtml5Camera(status);
             }
+            cameraStarted = true;
         } catch (err) {
             console.error(err);
+            if (scanEngine === 'native') {
+                nativeLoopActive = false;
+                scanEngine = null;
+                nativeDetector = null;
+                document.getElementById('reader').innerHTML = '';
+                try {
+                    await startHtml5Camera(status);
+                    cameraStarted = true;
+                    return;
+                } catch (err2) {
+                    console.error(err2);
+                }
+            }
             status.textContent = 'Нажмите экран — разрешить камеру';
             status.style.color = '#ff9f0a';
         }
