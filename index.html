@@ -161,8 +161,7 @@
         <div id="reader"></div>
     </div>
     <p class="scan-hint" id="scan-hint">Держите код на расстоянии 15–25 см</p>
-    <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
-    <button type="button" class="btn-photo" id="photo-btn">Сфотографировать QR</button>
+    <button type="button" class="btn-photo" id="photo-btn">Зафиксировать кадр</button>
 
     <div id="status-display">Готов к работе</div>
 
@@ -226,31 +225,53 @@
 
     if (isIOS) {
         document.getElementById('scan-hint').textContent =
-            'iPhone: нажмите экран, если камера чёрная. 20–30 см до кода. Не читает — «Сфотографировать QR».';
+            'iPhone: нажмите экран, если камера чёрная. 20–30 см. Не читает — «Зафиксировать кадр».';
     }
 
-    document.getElementById('photo-btn').addEventListener('click', function () {
-        document.getElementById('photo-input').click();
-    });
+    async function captureFrameAndScan() {
+        if (!cameraStarted) {
+            alert('Сначала дождитесь запуска камеры.');
+            return;
+        }
 
-    document.getElementById('photo-input').addEventListener('change', async function (e) {
-        const file = e.target.files && e.target.files[0];
-        e.target.value = '';
-        if (!file) return;
+        const video = document.querySelector('#reader video');
+        if (!video || video.readyState < 2) {
+            alert('Камера ещё не готова. Подождите секунду.');
+            return;
+        }
+
+        initAudio();
+        screenFlash('green');
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+
         try {
             if (nativeDetector) {
-                const bitmap = await createImageBitmap(file);
-                const codes = await nativeDetector.detect(bitmap);
+                const codes = await nativeDetector.detect(canvas);
                 if (!codes.length) throw new Error('no code');
                 onScanSuccess(codes[0].rawValue);
-            } else if (scannerInstance) {
+                return;
+            }
+            if (scannerInstance) {
+                const blob = await new Promise(function (resolve) {
+                    canvas.toBlob(resolve, 'image/jpeg', 0.92);
+                });
+                const file = new File([blob], 'frame.jpg', { type: 'image/jpeg' });
                 const text = await scannerInstance.scanFile(file, false);
                 onScanSuccess(text);
+                return;
             }
+            throw new Error('no engine');
         } catch (err) {
-            alert('QR на снимке не найден. Подойдите ближе, включите свет, снимите ровно.');
+            screenFlash('red');
+            alert('QR на кадре не найден. Подстройте расстояние, свет и нажмите снова.');
         }
-    });
+    }
+
+    document.getElementById('photo-btn').addEventListener('click', captureFrameAndScan);
 
     function onBodyTap() {
         initAudio();
