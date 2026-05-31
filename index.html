@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Scanner Warehouse Pro + Flashlight</title>
-    <script src="https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <style>
         :root {
             --ios-bg: #000000;
@@ -40,13 +40,15 @@
 
         #reader {
             width: 100%;
-            min-height: 260px;
-            background: #000;
+            min-height: 280px;
+            border: none !important;
         }
         #reader video {
-            width: 100%;
-            display: block;
-            object-fit: cover;
+            width: 100% !important;
+            object-fit: cover !important;
+        }
+        #reader__scan_region svg {
+            fill: var(--accent-green) !important;
         }
         .scan-hint {
             text-align: center;
@@ -57,7 +59,7 @@
             padding: 0 8px;
         }
         .btn-photo {
-            display: none;
+            display: block;
             background: rgba(255, 255, 255, 0.08);
             color: #fff;
             border: 1px solid var(--glass-border);
@@ -140,7 +142,7 @@
         }
     </style>
 </head>
-<body onclick="initAudio()">
+<body onclick="onBodyTap()">
 
     <div class="glass-panel">
         <select id="route-select" aria-label="Аллея или ворота"></select>
@@ -216,14 +218,12 @@
     let isSending = false;
     let isTorchOn = false;
     let scannerInstance = null;
+    let videoTrack = null;
+    let cameraStarted = false;
 
     if (isIOS) {
         document.getElementById('scan-hint').textContent =
-            'iPhone: 20–30 см, хороший свет. Вплотную не фокусируется. Не читает — кнопка «Сфотографировать QR».';
-        document.getElementById('photo-btn').style.display = 'block';
-    } else {
-        document.getElementById('scan-hint').textContent =
-            'Держите код на расстоянии 15–25 см (вплотную камера часто не фокусируется)';
+            'iPhone: нажмите экран, если камера чёрная. 20–30 см до кода. Не читает — «Сфотографировать QR».';
     }
 
     document.getElementById('photo-btn').addEventListener('click', function () {
@@ -233,14 +233,19 @@
     document.getElementById('photo-input').addEventListener('change', async function (e) {
         const file = e.target.files && e.target.files[0];
         e.target.value = '';
-        if (!file) return;
+        if (!file || !scannerInstance) return;
         try {
-            const result = await QrScanner.scanImage(file, { returnDetailedScanResult: true });
-            onScanSuccess(result.data);
+            const text = await scannerInstance.scanFile(file, false);
+            onScanSuccess(text);
         } catch (err) {
             alert('QR на снимке не найден. Подойдите ближе, включите свет, снимите ровно.');
         }
     });
+
+    function onBodyTap() {
+        initAudio();
+        startCamera();
+    }
 
     function saveToLocal() {
         localStorage.setItem('scanner_routes', JSON.stringify(routesStore));
@@ -273,14 +278,11 @@
     }
 
     async function toggleTorch() {
-        if (!scannerInstance) return;
+        if (!videoTrack) return;
         try {
-            if (isTorchOn) {
-                await scannerInstance.turnFlashOff();
-            } else {
-                await scannerInstance.turnFlashOn();
-            }
-            isTorchOn = !isTorchOn;
+            const state = !isTorchOn;
+            await videoTrack.applyConstraints({ advanced: [{ torch: state }] });
+            isTorchOn = state;
             document.getElementById('torch-toggle').classList.toggle('active', isTorchOn);
         } catch (err) {
             console.error('Фонарик не поддерживается', err);
@@ -402,38 +404,50 @@
         }
     }
 
-    (async function initScanner() {
-        QrScanner.WORKER_PATH = 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner-worker.min.js';
+    scannerInstance = new Html5Qrcode('reader', {
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+        verbose: false
+    });
 
-        const reader = document.getElementById('reader');
-        const video = document.createElement('video');
-        video.setAttribute('playsinline', 'true');
-        video.setAttribute('webkit-playsinline', 'true');
-        video.setAttribute('muted', 'true');
-        video.muted = true;
-        reader.appendChild(video);
-
-        scannerInstance = new QrScanner(
-            video,
-            function (decodedText) { onScanSuccess(decodedText); },
-            {
-                preferredCamera: 'environment',
-                maxScansPerSecond: isIOS ? 12 : 20,
-                highlightScanRegion: true,
-                highlightCodeOutline: true
-            }
-        );
+    async function startCamera() {
+        if (cameraStarted) return;
+        const status = document.getElementById('status-display');
 
         try {
-            await scannerInstance.start();
-            if (await scannerInstance.hasFlash()) {
-                document.getElementById('torch-toggle').style.display = 'flex';
+            await scannerInstance.start(
+                { facingMode: 'environment' },
+                {
+                    fps: isIOS ? 10 : 15,
+                    disableFlip: true,
+                    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+                    qrbox: function (w, h) {
+                        const edge = Math.min(w, h);
+                        const size = Math.floor(edge * 0.85);
+                        return { width: size, height: size };
+                    }
+                },
+                onScanSuccess
+            );
+
+            cameraStarted = true;
+            status.textContent = 'Готов к работе';
+            status.style.color = 'var(--accent-green)';
+
+            const video = document.querySelector('#reader video');
+            if (video && video.srcObject) {
+                videoTrack = video.srcObject.getVideoTracks()[0];
+                if (videoTrack && videoTrack.getCapabilities && videoTrack.getCapabilities().torch) {
+                    document.getElementById('torch-toggle').style.display = 'flex';
+                }
             }
         } catch (err) {
             console.error(err);
-            alert('Камера недоступна. Проверьте разрешения.');
+            status.textContent = 'Нажмите экран — разрешить камеру';
+            status.style.color = '#ff9f0a';
         }
-    })();
+    }
+
+    startCamera();
 
     updateInterface();
 </script>
